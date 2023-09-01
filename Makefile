@@ -7,10 +7,10 @@ INSTALL_BIN_DIR ?= $(PREFIX)/bin
 INSTALL_LIB_DIR ?= $(PREFIX)/lib
 INSTALL_INCLUDE_DIR ?= $(PREFIX)/include
 
-LIBS=fmt sdl ssl openal ui uv mysql sqlite
+LIBS=fmt sdl ssl openal ui uv mysql sqlite hlimgui
 ARCH ?= $(shell uname -m)
 
-CFLAGS = -Wall -O3 -I src -std=c11 -D LIBHL_EXPORTS
+CFLAGS = -Wall -O3 -I src -msse2 -mfpmath=sse -std=c11 -I include -I include/pcre -I include/mikktspace -I include/minimp3 -I include/sqlite/src -D LIBHL_EXPORTS -D SQLITE_USE_URI
 LFLAGS = -L. -lhl
 EXTRA_LFLAGS ?=
 LIBFLAGS =
@@ -55,7 +55,7 @@ UI = libs/ui/ui_stub.o
 
 MYSQL = libs/mysql/socket.o libs/mysql/sha1.o libs/mysql/my_proto.o libs/mysql/my_api.o libs/mysql/mysql.o
 
-SQLITE = libs/sqlite/sqlite.o
+SQLITE = libs/sqlite/sqlite.o include/sqlite/src/sqlite3.o
 
 LIB = ${PCRE} ${RUNTIME} ${STD}
 
@@ -223,6 +223,9 @@ mysql: ${MYSQL} libhl
 
 sqlite: ${SQLITE} libhl
 	${CC} ${CFLAGS} -shared -o sqlite.hdll ${SQLITE} ${LIBFLAGS} -L. -lhl -lsqlite3
+	
+hlimgui: ${HLIMGUI} libhl
+	${CC} ${CFLAGS} -shared -o hlimgui.hdll ${HLIMGUI} ${LIBFLAGS} -L. -lhl
 
 mesa:
 	(cd libs/mesa && ${MAKE})
