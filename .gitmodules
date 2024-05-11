@@ -1,2 +1,3 @@
 [submodule "libs/hlimgui"]
+	path = libs/hlimgui
 	url = https://github.com/GlassySundew/hlimgui
