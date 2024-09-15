@@ -5,7 +5,17 @@
 #else
 #	include <hl.h>
 #	include <uv.h>
+#	
 #endif
+
+#ifdef HL_WIN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
+
+
 
 #if (UV_VERSION_MAJOR <= 0)
 #	error "libuv1-dev required, uv version 0.x found"
@@ -45,6 +55,38 @@ static events_data *init_hl_data( uv_handle_t *h ) {
 	hl_add_root(&h->data);
 	h->data = d;
 	return d;
+}
+
+HL_PRIM char* HL_NAME(get_peer_name)( uv_tcp_t* h ) {
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+
+	char* output = malloc(INET_ADDRSTRLEN);
+	int addr_len = sizeof(struct sockaddr_in);
+	uv_tcp_getpeername(h, (uv_sockaddr*)&addr, &addr_len);
+	
+	wchar_t str[INET_ADDRSTRLEN];
+	SOCKET_ADDRESS sa;
+	sa.lpSockaddr = (struct sockaddr*)&addr;
+	sa.iSockaddrLength = sizeof(struct sockaddr_in);
+	DWORD str_len = sizeof(str);
+	WSAAddressToStringW(sa.lpSockaddr, sa.iSockaddrLength, NULL, str, &str_len);
+
+	int size_needed = WideCharToMultiByte(CP_ACP, 0, str, -1, NULL, 0, NULL, NULL);
+	char* ansi_str = (char*)malloc(size_needed);
+	WideCharToMultiByte(CP_ACP, 0, str, -1, ansi_str, size_needed, NULL, NULL);
+
+/*
+	sprintf(
+		output,
+		"%u %u %u %u",
+		addr.sin_addr.S_un.S_un_b.s_b1,
+		addr.sin_addr.S_un.S_un_b.s_b2,
+		addr.sin_addr.S_un.S_un_b.s_b3,
+		addr.sin_addr.S_un.S_un_b.s_b4
+		);
+	*/
+	return ansi_str;
 }
 
 static void register_callb( uv_handle_t *h, vclosure *c, int event_kind ) {
@@ -271,6 +313,7 @@ DEFINE_PRIM(_BOOL, fs_stop_wrap, _FS);
 // loop
 
 DEFINE_PRIM(_LOOP, default_loop, _NO_ARG);
+DEFINE_PRIM(_BYTES, get_peer_name, _HANDLE);
 DEFINE_PRIM(_I32, loop_close, _LOOP);
 DEFINE_PRIM(_I32, run, _LOOP _I32);
 DEFINE_PRIM(_I32, loop_alive, _LOOP);
