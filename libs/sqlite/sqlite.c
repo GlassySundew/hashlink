@@ -3,7 +3,7 @@
 #include <hl.h>
 #include <string.h>
 #include <sqlite3.h>
-#define SQLITE_USE_URI 1
+
 /**
 	<doc>
 	<h1>SQLite</h1>

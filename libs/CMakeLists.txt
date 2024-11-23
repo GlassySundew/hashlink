@@ -32,8 +32,6 @@ endif()
 
 option(WITH_SQLITE "Build sqlite.hdll." ON)
 if(WITH_SQLITE)
-	option(SQLITE_USE_URI 1)
-	
     add_subdirectory(sqlite)
 endif()
 
