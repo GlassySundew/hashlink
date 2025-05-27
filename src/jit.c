@@ -1718,15 +1718,20 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 			{
 				preg *out = bop == OSMod || bop == OUMod ? REG_AT(Edx) : PEAX;
 				preg *r;
-				int jz, jend;
+				preg p;
+				int jz, jz1 = 0, jend;
 				if( pa->kind == RCPU && pa->id == Eax ) RLOCK(pa);
 				r = alloc_cpu(ctx,b,true);
 				// integer div 0 => 0
 				op(ctx,TEST,r,r,is64);
-				XJump_small(JNotZero,jz);
-				op(ctx,XOR,out,out,is64);
-				XJump_small(JAlways,jend);
-				patch_jump(ctx,jz);
+				XJump_small(JZero, jz);
+				// Prevent MIN/-1 overflow exception
+				// OSMod: r = (b == 0 || b == -1) ? 0 : a % b
+				// OSDiv: r = (b == 0 || b == -1) ? a * b : a / b
+				if( bop == OSMod || bop == OSDiv ) {
+					op(ctx, CMP, r, pconst(&p,-1), is64);
+					XJump_small(JEq, jz1);
+				}
 				pa = fetch(a);
 				if( pa->kind != RCPU || pa->id != Eax ) {
 					scratch(PEAX);
@@ -1740,6 +1745,15 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 				else
 					op(ctx, CDQ, UNUSED, UNUSED, is64); // sign-extend Eax into Eax:Edx
 				op(ctx, bop == OUDiv || bop == OUMod ? DIV : IDIV, fetch(b), UNUSED, is64);
+				XJump_small(JAlways, jend);
+				patch_jump(ctx, jz);
+				patch_jump(ctx, jz1);
+				if( bop != OSDiv ) {
+					op(ctx, XOR, out, out, is64);
+				} else {
+					load(ctx, out, a);
+					op(ctx, IMUL, out, r, is64);
+				}
 				patch_jump(ctx, jend);
 				if( dst ) store(ctx, dst, out, true);
 				return out;
@@ -1865,7 +1879,7 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 		switch( ID2(pa->kind, pb->kind) ) {
 		case ID2(RFPU,RFPU):
 			op64(ctx,o,pa,pb);
-			if( o == COMISD && bop != OJSGt ) {
+			if( (o == COMISD || o == COMISS) && bop != OJSGt ) {
 				int jnotnan;
 				XJump_small(JNParity,jnotnan);
 				switch( bop ) {
@@ -2921,6 +2935,9 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 	ctx->totalRegsSize = size;
 	jit_buf(ctx);
 	ctx->functionPos = BUF_POS();
+	// make sure currentPos is > 0 before any reg allocations happen
+	// otherwise `alloc_reg` thinks that all registers are locked
+	ctx->currentPos = 1;
 	op_enter(ctx);
 #	ifdef HL_64
 	{
@@ -3248,7 +3265,7 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				case HF64:
 				case HF32:
 #					ifdef HL_64
-					op64(ctx,dst->t->kind == HF32 ? MOVSS : MOVSD,alloc_fpu(ctx,dst,false),pcodeaddr(&p,o->p2 * 8 + (dst->t->kind == HF32 ? 4 : 0)));
+					op64(ctx,dst->t->kind == HF32 ? CVTSD2SS : MOVSD,alloc_fpu(ctx,dst,false),pcodeaddr(&p,o->p2 * 8));
 #					else
 					op64(ctx,dst->t->kind == HF32 ? MOVSS : MOVSD,alloc_fpu(ctx,dst,false),paddr(&p,m->code->floats + o->p2));
 #					endif
@@ -3498,6 +3515,23 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 					{
 						hl_runtime_obj *rt = hl_get_obj_rt(dst->t);
 						preg *rr = alloc_cpu(ctx, dst, true);
+						if( rb->t->kind == HSTRUCT ) {
+							hl_type *ft = hl_obj_field_fetch(dst->t,o->p2)->t;
+							if( ft->kind == HPACKED ) {
+								hl_runtime_obj *frt = hl_get_obj_rt(ft->tparam);
+								preg *prb = alloc_cpu(ctx, rb, true);
+								preg *tmp = alloc_reg(ctx, RCPU_CALL);
+								int offset = 0;
+								while( offset < frt->size ) {
+									int remain = frt->size - offset;
+									int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+									copy(ctx, tmp, pmem(&p, (CpuReg)prb->id, offset), copy_size);
+									copy(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p2]+offset), tmp, copy_size);
+									offset += copy_size;
+								}
+								break;
+							}
+						}
 						copy_from(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p2]), rb);
 					}
 					break;
@@ -3587,6 +3621,23 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				vreg *r = R(0);
 				hl_runtime_obj *rt = hl_get_obj_rt(r->t);
 				preg *rr = alloc_cpu(ctx, r, true);
+				if( ra->t->kind == HSTRUCT ) {
+					hl_type *ft = hl_obj_field_fetch(r->t,o->p1)->t;
+					if( ft->kind == HPACKED ) {
+						hl_runtime_obj *frt = hl_get_obj_rt(ft->tparam);
+						preg *pra = alloc_cpu(ctx, ra, true);
+						preg *tmp = alloc_reg(ctx, RCPU_CALL);
+						int offset = 0;
+						while( offset < frt->size ) {
+							int remain = frt->size - offset;
+							int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+							copy(ctx, tmp, pmem(&p, (CpuReg)pra->id, offset), copy_size);
+							copy(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p1]+offset), tmp, copy_size);
+							offset += copy_size;
+						}
+						break;
+					}
+				}
 				copy_from(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p1]), ra);
 			}
 			break;
@@ -3760,6 +3811,11 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 			break;
 		case OGetMem:
 			{
+				#ifndef HL_64
+				if (dst->t->kind == HI64) {
+					error_i64();
+				}
+				#endif
 				preg *base = alloc_cpu(ctx, ra, true);
 				preg *offset = alloc_cpu64(ctx, rb, true);
 				store(ctx, dst, pmem2(&p,base->id,offset->id,1,0), false);
@@ -3842,7 +3898,7 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 						hl_runtime_obj *rt = hl_get_obj_rt(dst->t);
 						osize = rt->size;
 					}
-					preg *idx = alloc_cpu(ctx, rb, true);
+					preg *idx = alloc_cpu64(ctx, rb, true);
 					op64(ctx, IMUL, idx, pconst(&p,osize));
 					op64(ctx, isRead?MOV:LEA, rdst, pmem2(&p,alloc_cpu(ctx,ra, true)->id,idx->id,1,0));
 					store(ctx,dst,dst->current,false);
@@ -3855,14 +3911,35 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 			break;
 		case OSetArray:
 			{
-				preg *rrb = IS_FLOAT(rb) ? alloc_fpu(ctx,rb,true) : alloc_cpu(ctx,rb,true);
 				if( dst->t->kind == HABSTRACT ) {
-					bool isWrite = dst->t->kind != HOBJ && dst->t->kind != HSTRUCT;
-					// can only write pointers
-					if( !isWrite ) ASSERT(1);
-					copy(ctx, pmem2(&p,alloc_cpu(ctx,dst,true)->id,alloc_cpu64(ctx,ra,true)->id,sizeof(void*),0), rrb, rb->size);
-				} else
+					int osize;
+					bool isWrite = rb->t->kind != HOBJ && rb->t->kind != HSTRUCT;
+					if( isWrite ) {
+						osize = sizeof(void*);
+					} else {
+						hl_runtime_obj *rt = hl_get_obj_rt(rb->t);
+						osize = rt->size;
+					}
+					preg *pdst = alloc_cpu(ctx,dst,true);
+					preg *pra = alloc_cpu64(ctx,ra,true);
+					op64(ctx, IMUL, pra, pconst(&p,osize));
+					op64(ctx, ADD, pdst, pra);
+					scratch(pra);
+					preg *prb = alloc_cpu(ctx,rb,true);
+					preg *tmp = alloc_reg(ctx, RCPU_CALL);
+					int offset = 0;
+					while( offset < osize ) {
+						int remain = osize - offset;
+						int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+						copy(ctx, tmp, pmem(&p, prb->id, offset), copy_size);
+						copy(ctx, pmem(&p, pdst->id, offset), tmp, copy_size);
+						offset += copy_size;
+					}
+					scratch(pdst);
+				} else  {
+					preg *rrb = IS_FLOAT(rb) ? alloc_fpu(ctx,rb,true) : alloc_cpu(ctx,rb,true);
 					copy(ctx, pmem2(&p,alloc_cpu(ctx,dst,true)->id,alloc_cpu64(ctx,ra,true)->id,hl_type_size(rb->t),sizeof(varray)), rrb, rb->size);
+				}
 			}
 			break;
 		case OArraySize:
@@ -4003,19 +4080,35 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 				hl_opcode *next = f->ops + opCount + 1;
 				bool null_field_access = false;
-				if( next->op == OField && next->p2 == o->p1 ) {
+				int hashed_name = 0;
+				// skip const and operation between nullcheck and access
+				while( (next < f->ops + f->nops - 1) && (next->op >= OInt && next->op <= ODecr) ) {
+					next++;
+				}
+				if( (next->op == OField && next->p2 == o->p1) || (next->op == OSetField && next->p1 == o->p1) ) {
+					int fid = next->op == OField ? next->p3 : next->p2;
 					hl_obj_field *f = NULL;
 					if( dst->t->kind == HOBJ || dst->t->kind == HSTRUCT )
-						f = hl_obj_field_fetch(dst->t, next->p3);
+						f = hl_obj_field_fetch(dst->t, fid);
 					else if( dst->t->kind == HVIRTUAL )
-						f = dst->t->virt->fields + next->p3;
+						f = dst->t->virt->fields + fid;
 					if( f == NULL ) ASSERT(dst->t->kind);
- 					null_field_access = true;
+					null_field_access = true;
+					hashed_name = f->hashed_name;
+				} else if( (next->op >= OCall1 && next->op <= OCallN) && next->p3 == o->p1 ) {
+					int fid = next->p2 < 0 ? -1 : ctx->m->functions_indexes[next->p2];
+					hl_function *cf = ctx->m->code->functions + fid;
+					const uchar *name = fun_field_name(cf);
+					null_field_access = true;
+					hashed_name = hl_hash_gen(name, true);
+				}
+
+				if( null_field_access ) {
 					pad_before_call(ctx, HL_WSIZE);
-					if( f->hashed_name >= 0 && f->hashed_name < 256 )
-						op64(ctx,PUSH8,pconst(&p,f->hashed_name),UNUSED);
+					if( hashed_name >= 0 && hashed_name < 256 )
+						op64(ctx,PUSH8,pconst(&p,hashed_name),UNUSED);
 					else
-						op32(ctx,PUSH,pconst(&p,f->hashed_name),UNUSED);
+						op32(ctx,PUSH,pconst(&p,hashed_name),UNUSED);
 				} else {
 					pad_before_call(ctx, 0);
 				}

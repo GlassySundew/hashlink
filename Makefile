@@ -7,7 +7,7 @@ INSTALL_BIN_DIR ?= $(PREFIX)/bin
 INSTALL_LIB_DIR ?= $(PREFIX)/lib
 INSTALL_INCLUDE_DIR ?= $(PREFIX)/include
 
-LIBS=fmt sdl ssl openal ui uv mysql sqlite
+LIBS=fmt sdl ssl openal ui uv mysql sqlite heaps
 ARCH ?= $(shell uname -m)
 
 CFLAGS = -Wall -O3 -I src -std=c11 -D LIBHL_EXPORTS
@@ -105,6 +105,18 @@ MYSQL = libs/mysql/socket.o libs/mysql/sha1.o libs/mysql/my_proto.o libs/mysql/m
 
 SQLITE = libs/sqlite/sqlite.o
 
+HEAPS = libs/heaps/mikkt.o libs/heaps/meshoptimizer.o libs/heaps/vhacd.o
+HEAPS += include/mikktspace/mikktspace.o
+HEAPS += include/meshoptimizer/allocator.o include/meshoptimizer/overdrawoptimizer.o \
+	include/meshoptimizer/vcacheoptimizer.o include/meshoptimizer/clusterizer.o \
+	include/meshoptimizer/quantization.o include/meshoptimizer/vertexcodec.o \
+	include/meshoptimizer/indexcodec.o include/meshoptimizer/simplifier.o \
+	include/meshoptimizer/vertexfilter.o include/meshoptimizer/indexgenerator.o \
+	include/meshoptimizer/spatialorder.o include/meshoptimizer/vfetchanalyzer.o \
+	include/meshoptimizer/stripifier.o include/meshoptimizer/vfetchoptimizer.o \
+	include/meshoptimizer/overdrawanalyzer.o include/meshoptimizer/vcacheanalyzer.o
+HEAPS_CFLAGS = -fvisibility=hidden -I include/mikktspace -I include/meshoptimizer -I include/vhacd
+
 LIB = ${PCRE} ${RUNTIME} ${STD}
 
 BOOT = src/_main.o
@@ -137,29 +149,12 @@ else ifeq ($(UNAME),Darwin)
 # Mac
 LIBEXT=dylib
 
-BPREFIX := $(shell brew --prefix)
+BREW_PREFIX := $(shell brew --prefix)
+# prefixes for keg-only packages
+BREW_OPENAL_PREFIX := $(shell brew --prefix openal-soft)
 
-BREW_LIBJPEG := $(shell brew --prefix libjpeg-turbo)
-BREW_SDL2 := $(shell brew --prefix sdl2)
-BREW_JPEGTURBO := $(shell brew --prefix jpeg-turbo)
-BREW_VORBIS := $(shell brew --prefix libvorbis)
-BREW_OPENAL := $(shell brew --prefix openal-soft)
-BREW_MBEDTLS := $(shell brew --prefix mbedtls)
-BREW_LIBPNG := $(shell brew --prefix libpng)
-BREW_LIBOGG := $(shell brew --prefix libogg)
-BREW_LIBUV := $(shell brew --prefix libuv)
-
-CFLAGS += -m$(MARCH) -I include -I $(BREW_LIBJPEG)/include \
-	-I $(BREW_JPEGTURBO)/include -I $(BREW_SDL2)/include -I $(BREW_VORBIS)/include \
-	-I $(BREW_MBEDTLS)/include -I $(BREW_LIBPNG)/include -I $(BREW_LIBOGG)/include \
-	-I $(BREW_LIBUV)/include \
-	-I $(BREW_OPENAL)/include -Dopenal_soft  -DGL_SILENCE_DEPRECATION
+CFLAGS += -m$(MARCH) -I include -I $(BREW_PREFIX)/include -I $(BREW_OPENAL_PREFIX)/include -Dopenal_soft -DGL_SILENCE_DEPRECATION
 LFLAGS += -Wl,-export_dynamic
-
-CFLAGS += -m$(MARCH) -I include -I /usr/local/include -I /usr/local/opt/libjpeg-turbo/include \
-	-I /usr/local/opt/jpeg-turbo/include -I /usr/local/opt/sdl2/include -I /usr/local/opt/libvorbis/include \
-	-I /usr/local/opt/openal-soft/include -Dopenal_soft  -DGL_SILENCE_DEPRECATION
-LFLAGS += -Wl,-export_dynamic -L/usr/local/lib
 
 ifdef OSX_SDK
 ISYSROOT = $(shell xcrun --sdk macosx$(OSX_SDK) --show-sdk-path)
@@ -167,9 +162,7 @@ CFLAGS += -isysroot $(ISYSROOT)
 LFLAGS += -isysroot $(ISYSROOT)
 endif
 
-LIBFLAGS += -L$(BREW_LIBJPEG)/lib -L$(BREW_SDL2)/lib -L$(BREW_JPEGTURBO)/lib \
-			-L$(BREW_VORBIS)/lib -L$(BREW_OPENAL)/lib -L$(BREW_MBEDTLS)/lib \
-			-L$(BREW_LIBPNG)/lib -L$(BREW_LIBOGG)/lib -L$(BREW_LIBUV)/lib
+LIBFLAGS += -L$(BREW_PREFIX)/lib -L$(BREW_OPENAL_PREFIX)/lib
 LIBOPENGL = -framework OpenGL
 LIBOPENAL = -lopenal
 LIBSSL = -framework Security -framework CoreFoundation
@@ -290,6 +283,23 @@ mysql: ${MYSQL} libhl
 sqlite: ${SQLITE} libhl
 	${CC} ${CFLAGS} -shared -o sqlite.hdll ${SQLITE} ${LIBFLAGS} -L. -lhl -lsqlite3
 
+CXXFLAGS:=$(filter-out -std=c11,$(CFLAGS)) -std=c++11
+
+./include/mikktspace/%.o: ./include/mikktspace/%.c
+	${CC} ${CFLAGS} -o $@ -c $< ${HEAPS_CFLAGS}
+
+./include/meshoptimizer/%.o: ./include/meshoptimizer/%.cpp
+	${CC} ${CXXFLAGS} -o $@ -c $< ${HEAPS_CFLAGS}
+
+./libs/heaps/%.o: ./libs/heaps/%.c
+	${CC} ${CFLAGS} -o $@ -c $< ${HEAPS_CFLAGS}
+
+./libs/heaps/%.o: ./libs/heaps/%.cpp
+	${CC} ${CXXFLAGS} -o $@ -c $< ${HEAPS_CFLAGS}
+
+heaps: ${HEAPS} libhl
+	${CXX} ${CFLAGS} ${HEAPS_CFLAGS} -shared -o heaps.hdll ${HEAPS} ${LIBFLAGS} -L. -lhl
+
 mesa:
 	(cd libs/mesa && ${MAKE})
 
@@ -363,7 +373,7 @@ codesign_osx:
 	${CC} ${CFLAGS} -o $@ -c $<
 
 clean_o:
-	rm -f ${STD} ${BOOT} ${RUNTIME} ${PCRE} ${HL} ${FMT} ${SDL} ${SSL} ${OPENAL} ${UI} ${UV} ${MYSQL} ${SQLITE} ${HL_DEBUG}
+	rm -f ${STD} ${BOOT} ${RUNTIME} ${PCRE} ${HL} ${FMT} ${SDL} ${SSL} ${OPENAL} ${UI} ${UV} ${MYSQL} ${SQLITE} ${HEAPS} ${HL_DEBUG}
 
 clean: clean_o
 	rm -f hl hl.exe libhl.$(LIBEXT) *.hdll

@@ -1,3 +1,4 @@
+package hlprof;
 
 class StackElement {
 	static var UID = 0;
@@ -54,6 +55,7 @@ class StackLink {
 
 class Frame {
 	public var samples : Array<{ thread : Int, time : Float, stack : Array<StackElement> }> = [];
+	public var marks : Array<{ thread : Int, time : Float, msgId : Int, data : String }> = [];
 	public var startTime : Float;
 	public function new() {
 	}
@@ -102,8 +104,7 @@ class ProfileGen {
 		}];
 	}
 
-	static function main() {
-		var args = Sys.args();
+	public static function run( args : Array<String> ) {
 		var outFile = null;
 		var file = null;
 		var debug = false;
@@ -135,7 +136,11 @@ class ProfileGen {
 		if( sys.FileSystem.isDirectory(file) ) file += "/hlprofile.dump";
 		if( outFile == null ) outFile = file;
 
+		#if js
+		var f = new haxe.io.BytesInput(sys.io.File.getBytes(file));
+		#else
 		var f = sys.io.File.read(file);
+		#end
 		if( f.readString(4) != "PROF" ) throw "Invalid profiler file";
 		var version = f.readInt32();
 		var sampleCount = f.readInt32();
@@ -217,7 +222,8 @@ class ProfileGen {
 					tcur.curFrame.startTime = time;
 					tcur.frames.push(tcur.curFrame);
 				default:
-					Sys.println("Unknown profile message #"+msgId);
+					var dataStr = data.getString(0, data.length, RawNative); // our string is encoded in hl native format utf16 (ucs2)
+					tcur.curFrame.marks.push({ thread : tid, time : time, msgId : msgId, data : dataStr });
 				}
 			}
 		}
@@ -237,9 +243,9 @@ class ProfileGen {
 		var mainTid = threads[0].tid;
 		var json : Array<Dynamic> = [for( t in threads )
 			{
-    			pid : 0,
-    			tid : t.tid,
- 	 			ts : 0,
+				pid : 0,
+				tid : t.tid,
+				ts : 0,
 				ph : "M",
 				cat : "__metadata",
 				name : "thread_name",
@@ -287,12 +293,13 @@ class ProfileGen {
 				ts : 0,
 				ph : "P",
 				cat : "disabled-by-default-v8.cpu_profiler",
-			    name : "Profile",
+				name : "Profile",
 				id : "0x"+profileId,
 				args: { data : { startTime : 0 } },
 			});
 
-			for( f in thread.frames ) {
+			for( findex in 0...thread.frames.length ) {
+				var f = thread.frames[findex];
 				if( f.samples.length == 0 ) continue;
 				var ts = timeStamp(f.startTime);
 				var tend = timeStamp(f.samples[f.samples.length-1].time);
@@ -300,11 +307,38 @@ class ProfileGen {
 					pid : 0,
 					tid : tid,
 					ts : ts,
-					dur : tend - ts, 
+					dur : tend - ts,
 					ph : "X",
 					cat : "disabled-by-default-devtools.timeline",
 					name : "RunTask",
 				});
+				// Insert event marker as performance.measure
+				if( f.marks.length == 0 ) continue;
+				for( mindex in 0...f.marks.length ) {
+					var mark = f.marks[mindex];
+					var markStart = timeStamp(mark.time);
+					var markEnd = ( mindex == f.marks.length-1 ) ? tend : timeStamp(f.marks[mindex+1].time);
+					json.push({
+						pid : 0,
+						tid : tid,
+						ts : markStart,
+						ph : "b",
+						cat : "blink.user_timing",
+						id2 : { local : '$findex' },
+						args : {},
+						name : '${mark.msgId}:${mark.data}',
+					});
+					json.push({
+						pid : 0,
+						tid : tid,
+						ts : markEnd,
+						ph : "e",
+						cat : "blink.user_timing",
+						id2 : { local : '$findex' },
+						args : {},
+						name : '${mark.msgId}:${mark.data}',
+					});
+				}
 			}
 			for( f in thread.frames ) {
 				if( f.samples.length == 0 ) continue;
@@ -352,4 +386,7 @@ class ProfileGen {
 		sys.io.File.saveContent(outFile, debug ? haxe.Json.stringify(json,"\t") : haxe.Json.stringify(json));
 	}
 
+	static function main() {
+		run(Sys.args());
+	}
 }

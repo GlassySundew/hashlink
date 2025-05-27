@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.13)
 
 set(HL_VERSION_MAJOR 1)
-set(HL_VERSION_MINOR 14)
+set(HL_VERSION_MINOR 15)
 set(HL_VERSION_PATCH 0)
 set(HL_VERSION ${HL_VERSION_MAJOR}.${HL_VERSION_MINOR}.${HL_VERSION_PATCH})
 
@@ -34,12 +34,8 @@ list(APPEND CMAKE_MODULE_PATH
     ${CMAKE_CURRENT_SOURCE_DIR}/other/cmake
 )
 
-if(CMAKE_VERSION VERSION_LESS "3.1")
-    set(CMAKE_C_FLAGS "-std=c11 ${CMAKE_C_FLAGS}")
-else()
-    set(CMAKE_C_STANDARD 11)
-    set(CMAKE_C_STANDARD_REQUIRED ON)
-endif()
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # put output in "bin"
 
@@ -206,11 +202,18 @@ if(BUILD_TESTING)
         haxe
     )
 
+    if("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Win32")
+        SET(HAXE_FLAGS -D hl-legacy32)
+    else()
+        SET(HAXE_FLAGS )
+    endif()
+
     #####################
     # hello.hl
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello.hl
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main HelloWorld
     )
@@ -223,6 +226,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads.hl
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main Threads
     )
@@ -235,6 +239,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample.hl
             -cp ${CMAKE_SOURCE_DIR}/other/uvsample -main UVSample
     )
@@ -247,6 +252,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello/hello.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello/hello.c
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main HelloWorld
     )
@@ -269,6 +275,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads/threads.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads/threads.c
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main Threads
     )
@@ -291,6 +298,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample/uvsample.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample/uvsample.c
             -cp ${CMAKE_SOURCE_DIR}/other/uvsample -main UVSample
     )
