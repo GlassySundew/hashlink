@@ -5,13 +5,14 @@
 #else
 #	include <hl.h>
 #	include <uv.h>
-#	
 #endif
 
 #ifdef HL_WIN
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
 
@@ -58,6 +59,7 @@ static events_data *init_hl_data( uv_handle_t *h ) {
 }
 
 HL_PRIM char* HL_NAME(get_peer_name)( uv_tcp_t* h ) {
+        #ifdef HL_WIN
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(addr));
 
@@ -76,17 +78,31 @@ HL_PRIM char* HL_NAME(get_peer_name)( uv_tcp_t* h ) {
 	char* ansi_str = (char*)malloc(size_needed);
 	WideCharToMultiByte(CP_ACP, 0, str, -1, ansi_str, size_needed, NULL, NULL);
 
-/*
-	sprintf(
-		output,
-		"%u %u %u %u",
-		addr.sin_addr.S_un.S_un_b.s_b1,
-		addr.sin_addr.S_un.S_un_b.s_b2,
-		addr.sin_addr.S_un.S_un_b.s_b3,
-		addr.sin_addr.S_un.S_un_b.s_b4
-		);
-	*/
 	return ansi_str;
+	
+	#else
+	
+	struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+
+        int addr_len = sizeof(addr);
+        if (uv_tcp_getpeername(h, (struct sockaddr*)&addr, &addr_len) != 0) {
+            return NULL; // Обработка ошибки, если uv_tcp_getpeername неудачен
+        }
+
+        char* output = malloc(INET_ADDRSTRLEN);
+        if (!output) {
+            return NULL; // Обработка ошибки выделения памяти
+        }
+
+        // Преобразуем IP-адрес в строку
+        if (!inet_ntop(AF_INET, &(addr.sin_addr), output, INET_ADDRSTRLEN)) {
+            free(output);
+            return NULL; // Обработка ошибки inet_ntop
+        }
+
+        return output;        
+	#endif
 }
 
 static void register_callb( uv_handle_t *h, vclosure *c, int event_kind ) {
