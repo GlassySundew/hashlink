@@ -1,5 +1,6 @@
 #define HL_NAME(n) dx12_##n
 #include <hl.h>
+#undef _GUID
 
 #ifdef HL_WIN_DESKTOP
 #include <dxgi.h>
@@ -28,7 +29,7 @@
 #define DXERR(cmd)	{ HRESULT __ret = cmd; if( __ret == E_OUTOFMEMORY ) return NULL; if( __ret != S_OK ) ReportDxError(__ret,__LINE__); }
 #define CHKERR(cmd) { HRESULT __ret = cmd; if( FAILED(__ret) ) ReportDxError(__ret,__LINE__); }
 
-static int gs_constants[] = {
+static unsigned int gs_constants[] = {
 #ifdef _GAMING_XBOX_XBOXONE
 	D3D12XBOX_TEXTURE_DATA_PITCH_ALIGNMENT,
 #else
@@ -343,7 +344,7 @@ HL_PRIM void HL_NAME(flush_messages)() {
 #endif
 }
 
-HL_PRIM uchar *HL_NAME(get_device_name)() {
+HL_PRIM const uchar *HL_NAME(get_device_name)() {
 	DXGI_ADAPTER_DESC desc;
 #ifndef HL_XBS
 	IDXGIAdapter *adapter = NULL;
@@ -695,7 +696,7 @@ HL_PRIM vbyte *HL_NAME(serialize_root_signature)( D3D12_ROOT_SIGNATURE_DESC *sig
 	ID3DBlob *error = NULL;
 	HRESULT r = D3D12SerializeRootSignature(signature,version, &data, &error);
 	if( !SUCCEEDED(r) ) {
-		uchar *c = error ? hl_to_utf16((char*)error->GetBufferPointer()) : USTR("Invalid argument");
+		const uchar *c = error ? hl_to_utf16((char*)error->GetBufferPointer()) : USTR("Invalid argument");
 		if( error ) error->Release();
 		hl_error("%s",c);
 	}

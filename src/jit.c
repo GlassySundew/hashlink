@@ -24,6 +24,7 @@
 #endif
 #include <math.h>
 #include <hlmodule.h>
+#include "hlsystem.h"
 
 #ifdef __arm__
 #	error "JIT does not support ARM processors, only x86 and x86-64 are supported, please use HashLink/C native compilation instead"
@@ -1845,6 +1846,7 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 	case HABSTRACT:
 	case HARRAY:
 	case HI64:
+	case HGUID:
 		switch( ID2(pa->kind, pb->kind) ) {
 		case ID2(RCPU,RCPU):
 		case ID2(RCPU,RSTACK):
@@ -4248,6 +4250,13 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				op64(ctx,MOV,pmem(&p,treg->id,offset),trap);
 
 				/*
+					trap E,@catch
+					catch g
+					catch g2
+					...
+					@:catch
+
+					// Before haxe 5
 					This is a bit hackshish : we want to detect the type of exception filtered by the catch so we check the following
 					sequence of HL opcodes:
 
@@ -4259,13 +4268,15 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 					??? is expected to be hl.BaseType.check
 				*/
+				hl_opcode *cat = f->ops + opCount + 1;
 				hl_opcode *next = f->ops + opCount + 1 + o->p2;
 				hl_opcode *next2 = f->ops + opCount + 2 + o->p2;
-				if( next->op == OGetGlobal && next2->op == OCall2 && next2->p3 == next->p1 && dst->stack.id == (int)(int_val)next2->extra ) {
-					hl_type *gt = m->code->globals[next->p2];
+				if( cat->op == OCatch || (next->op == OGetGlobal && next2->op == OCall2 && next2->p3 == next->p1 && dst->stack.id == (int)(int_val)next2->extra) ) {
+					int gindex = cat->op == OCatch ? cat->p1 : next->p2;
+					hl_type *gt = m->code->globals[gindex];
 					while( gt->kind == HOBJ && gt->obj->super ) gt = gt->obj->super;
 					if( gt->kind == HOBJ && gt->obj->nfields && gt->obj->fields[0].t->kind == HTYPE ) {
-						void *addr = m->globals_data + m->globals_indexes[next->p2];
+						void *addr = m->globals_data + m->globals_indexes[gindex];
 #						ifdef HL_64
 						op64(ctx,MOV,treg,pconst64(&p,(int_val)addr));
 						op64(ctx,MOV,treg,pmem(&p,treg->id,0));
@@ -4281,7 +4292,11 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 				size = begin_native_call(ctx, 1);
 				set_native_arg(ctx,trap);
+#ifdef HL_MINGW
+				call_native(ctx,_setjmp,size);
+#else
 				call_native(ctx,setjmp,size);
+#endif
 				op64(ctx,TEST,PEAX,PEAX);
 				XJump_small(JZero,jenter);
 				op64(ctx,ADD,PESP,pconst(&p,trap_size));
@@ -4471,6 +4486,9 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				}
 			}
 			break;
+		case OCatch:
+			// Only used by OTrap typing
+			break;
 		default:
 			jit_error(hl_op_name(o->op));
 			break;
@@ -4574,7 +4592,7 @@ void *hl_jit_code( jit_ctx *ctx, hl_module *m, int *codesize, hl_debug_infos **d
 		hl_setup_longjump(code + ctx->longjump);
 #		endif
 		int i;
-		for(i=0;i<sizeof(ctx->static_functions)/sizeof(void*);i++)
+		for(i=0;i<(int)(sizeof(ctx->static_functions)/sizeof(void*));i++)
 			ctx->static_functions[i] = (void*)(code + (int)(int_val)ctx->static_functions[i]);
 	}
 	// patch calls

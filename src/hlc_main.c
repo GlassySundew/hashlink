@@ -25,20 +25,13 @@
 #   include <SDL_main.h>
 #endif
 
-#ifdef HL_WIN_DESKTOP
-# ifndef CONST
-#	define CONST
-# endif
-# ifndef IN
-#	define IN
-# endif
-# ifndef OUT
-#	define OUT
-# endif
-# ifndef OPTIONAL
-#	define OPTIONAL
-# endif
+#if defined(HL_WIN_DESKTOP) || defined(HL_XBS)
 #	pragma warning(disable:4091)
+#	undef _GUID
+#ifndef WIN32_LEAN_AND_MEAN
+#	define WIN32_LEAN_AND_MEAN
+#endif
+#	include <windows.h>
 #if !defined(HL_MINGW)
 #	include <DbgHelp.h>
 #else
@@ -49,6 +42,26 @@
 #	undef IN
 #	undef OUT
 #	undef OPTIONAL
+#	undef DELETE
+#	undef ERROR
+#	undef NO_ERROR
+#	undef STRICT
+#	undef TRUE
+#	undef FALSE
+#	undef CW_USEDEFAULT
+#	undef far
+#	undef FAR
+#	undef near
+#	undef NEAR
+#	undef GENERIC_READ
+#	undef ALTERNATE
+#	undef DIFFERENCE
+#	undef DOUBLE_CLICK
+#	undef WAIT_FAILED
+#	undef TRANSPARENT
+#	undef CopyFile
+#	undef COLOR_HIGHLIGHT
+#	undef __valid
 #endif
 
 #ifdef HL_CONSOLE
@@ -67,7 +80,11 @@ extern void sys_global_exit();
 #	define _CrtCheckMemory()
 #endif
 
-#if defined(HL_LINUX) || defined(HL_MAC)
+#if defined(HL_LINUX) && (!defined(HL_ANDROID) || __ANDROID_MIN_SDK_VERSION__ >= 33)
+#define HL_LINUX_BACKTRACE
+#endif
+
+#if defined(HL_LINUX_BACKTRACE) || defined(HL_MAC)
 #	include <execinfo.h>
 #endif
 
@@ -96,7 +113,7 @@ static uchar *hlc_resolve_symbol( void *addr, uchar *out, int *outSize ) {
 		*outSize = usprintf(out,*outSize,USTR("%s(%s:%d)"),data.sym.Name,wcsrchr(line.FileName,'\\')+1,(int)line.LineNumber);
 		return out;
 	}
-#elif defined(HL_LINUX) || defined(HL_MAC)
+#elif defined(HL_LINUX_BACKTRACE) || defined(HL_MAC)
 	void *array[1];
 	char **strings;
 	array[0] = addr;
@@ -124,7 +141,7 @@ static int hlc_capture_stack( void **stack, int size ) {
 #	endif
 #	ifdef HL_WIN_DESKTOP
 	count = CaptureStackBackTrace(2, size, stack, NULL) - 8; // 8 startup
-#	elif defined(HL_LINUX)
+#	elif defined(HL_LINUX_BACKTRACE)
 	count = backtrace(stack, size) - 8;
 #	elif defined(HL_MAC)
 	count = backtrace(stack, size) - 6;
@@ -133,22 +150,7 @@ static int hlc_capture_stack( void **stack, int size ) {
 	return count;
 }
 
-#if defined( HL_VCC )
-static int throw_handler( int code ) {
-	#if !defined(HL_XBO)
-	switch( code ) {
-	case EXCEPTION_ACCESS_VIOLATION: hl_error("Access violation");
-	case EXCEPTION_STACK_OVERFLOW: hl_error("Stack overflow");
-	default: hl_error("Unknown runtime error");
-	}
-	return EXCEPTION_CONTINUE_SEARCH;
-	#else
-	return 0;
-	#endif
-}
-#endif
-
-#ifdef HL_WIN_DESKTOP
+#if defined(HL_WIN_DESKTOP) || defined(HL_XBS)
 int wmain(int argc, uchar *argv[]) {
 #else
 int main(int argc, char *argv[]) {
@@ -171,25 +173,15 @@ int main(int argc, char *argv[]) {
 	cl.fun = hl_entry_point;
 	ret = hl_dyn_call_safe(&cl, NULL, 0, &isExc);
 	if( isExc ) {
-		uprintf(USTR("Uncaught exception: %s\n"), hl_to_string(ret));
-		if( !hl_maybe_print_custom_stack(ret) ) {
-			varray *a = hl_exception_stack();
-			int i;
-			for( i = 0; i < a->size; i++ )
-				uprintf(USTR("Called from %s\n"), hl_aptr(a, uchar*)[i]);
-		}
+		hl_print_uncaught_exception(ret);
 	}
 	hl_global_free();
 	sys_global_exit();
 	return (int)isExc;
 }
 
-#if defined(HL_WIN_DESKTOP) && !defined(_CONSOLE)
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+#if (defined(HL_WIN_DESKTOP) && !defined(_CONSOLE)) || defined(HL_XBS)
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow) {
 	return wmain(__argc, __wargv);
-}
-#elif defined(HL_XBS)
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-	return main(__argc, __argv);
 }
 #endif
