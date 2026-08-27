@@ -317,6 +317,70 @@ HL_PRIM void hl_sys_sleep( double f ) {
 	hl_blocking(false);
 }
 
+/*
+	Wait with sub-millisecond precision without changing the process-wide timer
+	resolution. This is intended for frame pacing and other deadline-based code;
+	regular sys_sleep remains the low-CPU general-purpose sleep primitive.
+*/
+HL_PRIM void hl_sys_precise_sleep( double f ) {
+	const double spin_time = 0.0005;
+	if( f <= 0 ) return;
+	hl_blocking(true);
+#if defined(HL_WIN)
+	{
+		LARGE_INTEGER start, now;
+		LONGLONG deadline;
+		QueryPerformanceCounter(&start);
+		deadline = start.QuadPart + (LONGLONG)(f * qpcFrequency.QuadPart);
+		if( f > spin_time ) {
+			HANDLE timer;
+			LARGE_INTEGER due;
+			LONGLONG coarse_ticks;
+			#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+			#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+			#endif
+			timer = CreateWaitableTimerExW(NULL,NULL,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
+			if( timer == NULL )
+				timer = CreateWaitableTimerExW(NULL,NULL,0,TIMER_ALL_ACCESS);
+			QueryPerformanceCounter(&now);
+			coarse_ticks = deadline - now.QuadPart - (LONGLONG)(spin_time * qpcFrequency.QuadPart);
+			if( timer != NULL && coarse_ticks > 0 ) {
+				due.QuadPart = -(coarse_ticks * 10000000LL / qpcFrequency.QuadPart);
+				if( SetWaitableTimer(timer,&due,0,NULL,NULL,FALSE) )
+					WaitForSingleObject(timer,INFINITE);
+				CloseHandle(timer);
+			} else if( timer != NULL ) {
+				CloseHandle(timer);
+			} else if( coarse_ticks > 0 ) {
+				Sleep((DWORD)(coarse_ticks * 1000LL / qpcFrequency.QuadPart));
+			}
+		}
+		do {
+			YieldProcessor();
+			QueryPerformanceCounter(&now);
+		} while( now.QuadPart < deadline );
+	}
+#else
+	{
+		struct timespec start, now, coarse;
+		int64 deadline;
+		clock_gettime(CLOCK_MONOTONIC,&start);
+		deadline = (int64)start.tv_sec * 1000000000LL + start.tv_nsec + (int64)(f * 1000000000.0);
+		if( f > spin_time ) {
+			double wait = f - spin_time;
+			coarse.tv_sec = (time_t)wait;
+			coarse.tv_nsec = (long)((wait - coarse.tv_sec) * 1000000000.0);
+			while( nanosleep(&coarse,&coarse) != 0 && errno == EINTR ) {
+			}
+		}
+		do {
+			clock_gettime(CLOCK_MONOTONIC,&now);
+		} while( (int64)now.tv_sec * 1000000000LL + now.tv_nsec < deadline );
+	}
+#endif
+	hl_blocking(false);
+}
+
 HL_PRIM bool hl_sys_set_time_locale( vbyte *l ) {
 #ifdef HL_POSIX
 	locale_t lc, old;
@@ -707,6 +771,7 @@ DEFINE_PRIM(_BYTES, sys_get_env, _BYTES);
 DEFINE_PRIM(_BOOL, sys_put_env, _BYTES _BYTES);
 DEFINE_PRIM(_ARR, sys_env, _NO_ARG);
 DEFINE_PRIM(_VOID, sys_sleep, _F64);
+DEFINE_PRIM(_VOID, sys_precise_sleep, _F64);
 DEFINE_PRIM(_BOOL, sys_set_time_locale, _BYTES);
 DEFINE_PRIM(_BYTES, sys_get_cwd, _NO_ARG);
 DEFINE_PRIM(_BOOL, sys_set_cwd, _BYTES);
